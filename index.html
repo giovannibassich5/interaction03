@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gesture Inference</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: "Helvetica Neue", sans-serif;
+      padding: 2rem;
+      background: #f9f9f9;
+      color: #333;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    label {
+      display: block;
+      margin-top: 1rem;
+      font-weight: bold;
+    }
+
+    input[type="text"], #features {
+      width: 100%;
+      max-width: 500px;
+      padding: 0.5rem;
+      margin-top: 0.3rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+
+    button {
+      margin-top: 1.5rem;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      background: #333;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #000;
+    }
+
+    #results {
+      margin-top: 2rem;
+      font-family: monospace;
+      white-space: pre-wrap;
+      background: #eee;
+      padding: 1rem;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🤝 Handshake Inference</h1>
+
+  <button onclick="getAccel()">1️⃣ Dai i permessi sensori</button>
+
+  <label>Permesso:</label>
+  <input type="text" id="permission" readonly>
+
+  <label>Accelerazione X:</label>
+  <input type="text" id="x" readonly>
+
+  <label>Accelerazione Y:</label>
+  <input type="text" id="y" readonly>
+
+  <label>Accelerazione Z:</label>
+  <input type="text" id="z" readonly>
+
+  <label>Orientamento α:</label>
+  <input type="text" id="alpha" readonly>
+
+  <label>Orientamento β:</label>
+  <input type="text" id="beta" readonly>
+
+  <label>Orientamento γ:</label>
+  <input type="text" id="gamma" readonly>
+
+  <button onclick="grf()">2️⃣ Genera Raw Features</button>
+
+  <label>Features:</label>
+  <input type="text" id="features" placeholder="I dati vengono generati automaticamente.">
+
+  <button id="run-inference">3️⃣ Run Inference</button>
+
+  <div id="results">🧪 Risultato inferenza qui...</div>
+
+  <!-- Scripts necessari -->
+  <script src="edge-impulse-standalone.js"></script>
+  <script src="run-impulse.js"></script>
+
+  <script>
+    let sensorReadingsString = "";
+    const maxTriplets = 125;
+
+    function getAccel() {
+      if (typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+          .then(response => {
+            if (response === 'granted') {
+              document.getElementById('permission').value = "✅ Permesso concesso";
+
+              window.addEventListener('devicemotion', (event) => {
+                const x = event.accelerationIncludingGravity.x || 0;
+                const y = event.accelerationIncludingGravity.y || 0;
+                const z = event.accelerationIncludingGravity.z || 0;
+                document.getElementById('x').value = x;
+                document.getElementById('y').value = y;
+                document.getElementById('z').value = z;
+                updateSensorReadingsString(x, y, z);
+              });
+
+              window.addEventListener('deviceorientation', (event) => {
+                document.getElementById('alpha').value = event.alpha || 0;
+                document.getElementById('beta').value = event.beta || 0;
+                document.getElementById('gamma').value = event.gamma || 0;
+              });
+            } else {
+              document.getElementById('permission').value = "❌ Permesso negato";
+            }
+          })
+          .catch(err => {
+            console.error(err);
+            alert("Errore nel richiedere i permessi: " + err);
+          });
+      } else {
+        alert("Il browser non supporta la richiesta dei permessi sensori.");
+      }
+    }
+
+    function updateSensorReadingsString(newX, newY, newZ) {
+      const newReadings = `${newX},${newY},${newZ}`;
+      sensorReadingsString = sensorReadingsString
+        ? sensorReadingsString + "," + newReadings
+        : newReadings;
+
+      let readingsArray = sensorReadingsString.split(',');
+      while (readingsArray.length > maxTriplets * 3) {
+        readingsArray.splice(0, 3);
+      }
+
+      sensorReadingsString = readingsArray.join(',');
+    }
+
+    function grf() {
+      const elements = sensorReadingsString.split(',');
+      if (elements.length === 375) {
+        document.getElementById('features').value = sensorReadingsString;
+      } else {
+        alert("ℹ️ Non ci sono ancora abbastanza dati. Muovi un po’ il dispositivo.");
+      }
+    }
+
+    (async () => {
+      const classifier = new EdgeImpulseClassifier();
+      await classifier.init();
+
+      const socket = new WebSocket('wss://680f-109-118-45-42.ngrok-free.app');
+
+      socket.onopen = () => {
+        console.log("WebSocket connesso");
+      };
+
+      socket.onerror = (error) => {
+        console.error("Errore WebSocket:", error);
+      };
+
+      socket.onmessage = (event) => {
+        console.log("Dal server:", event.data);
+        if (event.data === 'handshake-success') {
+          alert("🤝 Handshake riuscito!");
+        } else if (event.data === 'handshake-failed') {
+          alert("❌ Handshake non riuscito.");
+        }
+      };
+
+      document.querySelector('#run-inference').onclick = async () => {
+        try {
+          const raw = document.getElementById('features').value;
+          const features = raw.split(',').map(x => Number(x.trim()));
+          const res = await classifier.classify(features);
+
+          document.getElementById('results').textContent = JSON.stringify(res, null, 4);
+
+          if (socket.readyState === WebSocket.OPEN) {
+            const topResult = res.results[0] || {};
+            socket.send(JSON.stringify({
+              type: 'gesture-data',
+              features: features,
+              label: topResult.label || null,
+              confidence: parseFloat(topResult.confidence || 0),
+              timestamp: Date.now()
+            }));
+          }
+
+        } catch (ex) {
+          alert("Errore durante l'inferenza: " + (ex.message || ex.toString()));
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
