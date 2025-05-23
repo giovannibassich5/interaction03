@@ -18,43 +18,33 @@ wss.on('connection', function connection(ws) {
 
     try {
       const data = JSON.parse(message);
+      const label = data.label || null;
+      const confidence = parseFloat(data.confidence || 0);
+      const now = Date.now();
+
+      if ((label !== 'HS' && label !== 'handshake') || confidence < 0.9) {
+        console.log(`⚠️ Gesto ignorato: ${label} (conf: ${confidence})`);
+        return;
+      }
 
       if (
-        data.type === 'gesture-data' &&
-        data.features &&
-        Array.isArray(data.features)
+        lastGesture &&
+        now - lastGesture.timestamp < HANDSHAKE_WINDOW_MS &&
+        lastGesture.ws !== ws
       ) {
-        const label = data.label || null;
-        const confidence = parseFloat(data.confidence || 0);
-        const now = Date.now();
-
-        if ((label !== 'HS' && label !== 'handshake') || confidence < 0.9) {
-          console.log(`⚠️ Gesto ignorato: ${label} (conf: ${confidence})`);
-          return;
-        }
-
-        if (
-          lastGesture &&
-          now - lastGesture.timestamp < HANDSHAKE_WINDOW_MS &&
-          lastGesture.ws !== ws
-        ) {
-          ws.send('handshake-success');
-          lastGesture.ws.send('handshake-success');
-          console.log(`🤝 Handshake riuscito tra due client`);
-          lastGesture = null;
-        } else {
-          lastGesture = { timestamp: now, ws };
-
-          setTimeout(() => {
-            if (lastGesture && lastGesture.ws === ws) {
-              ws.send('handshake-failed');
-              console.log('❌ Handshake fallito');
-              lastGesture = null;
-            }
-          }, HANDSHAKE_WINDOW_MS);
-        }
+        ws.send('handshake-success');
+        lastGesture.ws.send('handshake-success');
+        console.log(`🤝 Handshake riuscito tra due client`);
+        lastGesture = null;
       } else {
-        console.log('⚠️ Messaggio gesture-data senza features riconosciute');
+        lastGesture = { timestamp: now, ws };
+        setTimeout(() => {
+          if (lastGesture && lastGesture.ws === ws) {
+            ws.send('handshake-failed');
+            console.log('❌ Handshake fallito');
+            lastGesture = null;
+          }
+        }, HANDSHAKE_WINDOW_MS);
       }
     } catch (err) {
       console.error('❗ Errore parsing messaggio:', err);
